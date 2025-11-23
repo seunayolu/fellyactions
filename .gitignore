@@ -1,0 +1,10 @@
+*.zip
+.vscode
+
+file
+
+.terraform
+
+.terraform.lock.*
+
+others
