@@ -1,0 +1,45 @@
+name: Build and Deploy to ECR
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  ECR_REPOSITORY: ${{vars.ECR_REPOSITORY}}
+
+permissions:
+  id-token: write
+  contents: read    
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v5
+      with:
+        role-to-assume: ${{ secrets.ROLE_ARN }}
+        aws-region: ${{ vars.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, tag, and push image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        cd php-app
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Image digest
+      run: echo ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
