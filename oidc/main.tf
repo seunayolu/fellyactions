@@ -38,7 +38,12 @@ resource "aws_iam_role" "github_actions_role" {
   assume_role_policy = data.aws_iam_policy_document.github_oidc_assume_role.json
 }
 
-resource "aws_iam_role_policy_attachment" "github_admin_access_attach" {
+resource "aws_iam_policy" "github_actions_policy" {
+  name   = "GitHub-Actions-Deploy-Policy"
+  policy = file("${path.module}/github-actions-policy.json")
+}
+
+resource "aws_iam_role_policy_attachment" "github_actions_policy_attach" {
   role       = aws_iam_role.github_actions_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+  policy_arn = aws_iam_policy.github_actions_policy.arn
 }
