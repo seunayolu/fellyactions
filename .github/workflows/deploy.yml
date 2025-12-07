@@ -1,0 +1,127 @@
+name: Build & Deploy (develop → Dev EKS)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+
+jobs:
+  build-and-deploy:
+    name: Build → Push Image → Deploy to Dev EKS
+    runs-on: ubuntu-latest
+
+    # Run only when on develop branch
+    if: github.ref == 'refs/heads/develop'
+
+    env:
+      AWS_REGION: eu-west-1
+      ECR_REPOSITORY: spring-cloud-config/develop
+      EKS_CLUSTER_NAME: my-dev-eks-cluster
+      K8S_NAMESPACE: dev
+      DEPLOYMENT_NAME: spring-cloud-config
+      CONTAINER_NAME: spring-cloud-config
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+    # -------------------------------------------------------
+    # 0. CHECKOUT
+    # -------------------------------------------------------
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    # -------------------------------------------------------
+    # 1. BUILD (JDK 21 + Gradle)
+    # -------------------------------------------------------
+    - name: Set up JDK 21
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '21'
+
+    - name: Cache Gradle
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Build with Gradle
+      run: ./gradlew clean build -x test
+
+    # -------------------------------------------------------
+    # 2. SECURITY SCAN (REPLACE WITH YOUR TOOLS)
+    # -------------------------------------------------------
+    - name: Security scan
+      run: |
+        echo "Running security scans..."
+        # Example:
+        # ./gradlew dependencyCheckAnalyze
+        # trivy fs .
+
+    # -------------------------------------------------------
+    # 3. AWS LOGIN + ECR PUSH
+    # -------------------------------------------------------
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v5
+      with:
+        role-to-assume: ${{ secrets.ROLE_ARN }}
+        aws-region: ${{ vars.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build Docker image
+      env:
+        ECR_REGISTRY: ${{ steps['login-ecr'].outputs.registry }}
+      run: |
+        IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+        echo "Building image → $IMAGE_URI"
+        docker build -t "$IMAGE_URI" .
+
+    - name: Push Docker image
+      env:
+        ECR_REGISTRY: ${{ steps['login-ecr'].outputs.registry }}
+      run: |
+        IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+        echo "Pushing image → $IMAGE_URI"
+        docker push "$IMAGE_URI"
+
+    # -------------------------------------------------------
+    # 4. DEPLOY TO EKS (dev)
+    # -------------------------------------------------------
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig \
+          --name "$EKS_CLUSTER_NAME" \
+          --region "$AWS_REGION"
+
+    - name: Create/Update Kubernetes Secrets
+      run: |
+        kubectl create secret generic ${DEPLOYMENT_NAME}-secrets \
+          --namespace "${K8S_NAMESPACE}" \
+          --from-literal=ENV_VAR_1="${{ secrets.APP_ENV_VAR_1 }}" \
+          --from-literal=ENV_VAR_2="${{ secrets.APP_ENV_VAR_2 }}" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+    - name: Apply manifest files
+      run: |
+        kubectl apply -f k8s/ -n "${K8S_NAMESPACE}"
+
+    - name: Update deployment image
+      env:
+        ECR_REGISTRY: ${{ steps['login-ecr'].outputs.registry }}
+      run: |
+        IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+        echo "Updating deployment image → $IMAGE_URI"
+
+        kubectl set image deployment/${DEPLOYMENT_NAME} \
+          ${CONTAINER_NAME}="${IMAGE_URI}" \
+          --namespace "${K8S_NAMESPACE}"
+
+        kubectl rollout status deployment/${DEPLOYMENT_NAME} \
+          --namespace "${K8S_NAMESPACE}"
